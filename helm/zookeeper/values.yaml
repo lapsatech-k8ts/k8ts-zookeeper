@@ -1,0 +1,18 @@
+app:
+  nodesCount: 3
+  node:
+    memory:
+      request: 256Mi
+      heap: 220M
+    ports:
+      client: 2181
+      server: 2888
+      election: 3888
+    storage:
+      mountPath: /opt/zookeeper/data
+
+deployment:
+  applyAntiAffinity: false
+  pvc:
+    enabled: true
+    capacity: 100Mi

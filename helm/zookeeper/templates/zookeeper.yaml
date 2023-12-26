@@ -1,0 +1,141 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $.Release.Name }}-hs
+  labels:
+    app: {{ $.Release.Name }}
+spec:
+  ports:
+  - name: server
+    port: {{ $.Values.app.node.ports.server }}
+  - name: leader-election
+    port: {{ $.Values.app.node.ports.election }}
+  clusterIP: None
+  selector:
+    app: {{ $.Release.Name }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $.Release.Name }}-cs
+  labels:
+    app: {{ $.Release.Name }}
+spec:
+  ports:
+  - name: client
+    port: {{ $.Values.app.node.ports.client }}
+  selector:
+    app: {{ $.Release.Name }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $.Release.Name }}-pdb
+  labels:
+    app: {{ $.Release.Name }}
+spec:
+  selector:
+    matchLabels:
+      app: {{ $.Release.Name }}
+  maxUnavailable: 1
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $.Release.Name }}-node
+  labels:
+    app: {{ $.Release.Name }}
+spec:
+  selector:
+    matchLabels:
+      app: {{ $.Release.Name }}
+  serviceName: {{ $.Release.Name }}-hs
+  replicas: {{ $.Values.app.nodesCount }}
+  updateStrategy:
+    type: RollingUpdate
+  podManagementPolicy: OrderedReady
+  template:
+    metadata:
+      labels:
+        app: {{ $.Release.Name }}
+    spec:
+{{- if $.Values.deployment.applyAntiAffinity }}
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: "app"
+                    operator: In
+                    values:
+                    - {{ $.Release.Name | quote }}
+              topologyKey: "kubernetes.io/hostname"
+{{- end }}
+      containers:
+      - name: kubernetes-zookeeper
+        imagePullPolicy: Always
+        image: "localhost:5000/lapsatech/kubernetes-zookeeper-3_9:latest"
+        resources:
+          requests:
+            memory: {{ $.Values.app.node.memory.request | quote }}
+        ports:
+        - name: client
+          containerPort: {{ $.Values.app.node.ports.client }}
+        - name: server
+          containerPort: {{ $.Values.app.node.ports.server }}
+        - name: leader-election
+          containerPort: {{ $.Values.app.node.ports.election }}
+        env:
+        - name: DEPLOYMENT_NODES_COUNT
+          value: {{ $.Values.app.nodesCount | quote }}
+        - name: DEPLOYMENT_DATA_DIR
+          value: {{ printf "%s/data" $.Values.app.node.storage.mountPath | quote }}
+        - name: DEPLOYMENT_DATALOG_DIR
+          value: {{ printf "%s/logs" $.Values.app.node.storage.mountPath | quote }}
+        - name: DEPLOYMENT_PORT_CLIENT
+          value: {{ $.Values.app.node.ports.client | quote }}
+        - name: DEPLOYMENT_PORT_ELECTION
+          value: {{ $.Values.app.node.ports.election | quote }}
+        - name: DEPLOYMENT_PORT_SERVER
+          value: {{ $.Values.app.node.ports.server | quote }}
+        - name: DEPLOYMENT_LOG_LEVEL
+          value: INFO
+        - name: DEPLOYMENT_MEMORY_HEAP
+          value: {{ $.Values.app.node.memory.heap | quote }}
+        readinessProbe:
+          exec:
+            command:
+            - zookeeper-ready.sh
+          initialDelaySeconds: 10
+          timeoutSeconds: 5
+          periodSeconds: 60
+        livenessProbe:
+          exec:
+            command:
+            - zookeeper-ready.sh
+          initialDelaySeconds: 10
+          timeoutSeconds: 5
+          periodSeconds: 60
+        volumeMounts:
+        - name: data
+          mountPath: {{ $.Values.app.node.storage.mountPath | quote }}
+{{- if not $.Values.deployment.pvc.enabled }}
+      volumes:
+      - name: data
+        emptyDir: {}
+{{- end }}
+      securityContext:
+        fsGroup: 1000
+        runAsUser: 1000
+{{- if $.Values.deployment.pvc.enabled }}
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    labels:
+      app: {{ $.Release.Name }}
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: {{ $.Values.deployment.pvc.capacity | quote }}
+{{- end }}
